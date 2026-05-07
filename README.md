@@ -3,7 +3,10 @@
 HTML-in-Canvas (`texElementImage2D`) を使用して、3D空間上の面にHTMLコンテンツを描画するプロジェクトです。
 試行錯誤中に発見した、**「ネイティブスクロールが動作しない（透明になる）」** という重要な制限事項とその回避策についてまとめています。公式ドキュメントを読んでいれば迷わなかったことです。
 
-<video src="https://github.com/nagarerouma/HTML-in-Canvas-scroll/video.mp4" controls="controls" muted="muted" style="max-width: 100%;"></video>
+
+https://github.com/user-attachments/assets/f075756a-faec-479a-9de8-76499b3ddcc6
+
+
 
 ## 📁 ファイル構成
 
