@@ -1,4 +1,4 @@
-# HTML-in-Canvas 3D Cube & Scrolling Trap
+# HTML-in-Canvas 3D Cube & Scrolling
 
 HTML-in-Canvas (`texElementImage2D`) を使用して、3D空間上の面にHTMLコンテンツを描画するプロジェクトです。
 開発中に発見した、**「ネイティブスクロールが動作しない（透明になる）」** という重要な制限事項とその回避策についてまとめています。
