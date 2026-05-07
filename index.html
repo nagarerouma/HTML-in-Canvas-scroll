@@ -1,0 +1,1103 @@
+<!DOCTYPE html>
+<!--
+  index.html
+  ------------------------------------------------------------------
+  このサンプル全体のメインファイル。
+
+  何をしているか:
+  1. <canvas layoutsubtree> の direct child として 6 枚の iframe を置く
+  2. 各 iframe の描画内容を HTML-in-Canvas の texElementImage2D でテクスチャ化する
+  3. WebGL でその 6 枚を立方体の各面に貼る
+  4. ドラッグで回転、ホイールでズームする
+  5. クリック位置を 3D 空間上の「どの面のどの UV 座標か」に変換し、
+     対応する iframe 内の DOM 要素へ click / focus を手動転送する
+
+  初学者にとっての大事なポイント:
+  - 「見た目の描画」と「実際の DOM イベント先」は別物として考える
+  - 立方体面に見えているのは WebGL のテクスチャであり、
+    直接 DOM がそこに存在しているわけではない
+  - そのため input や button を動かすには、
+    3D 面上のクリックを iframe 内 DOM の座標へ変換する必要がある
+-->
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>HTML-in-Canvas 3D Cube</title>
+
+  <!--
+    HTML-in-Canvas の主な仕様要素:
+    - layoutsubtree: canvas 子要素をレイアウト対象にする
+    - texElementImage2D: 子要素の描画結果を WebGL テクスチャへ転送する
+    - onpaint: 子要素の描画内容が変わったら再転送する
+    - requestPaint: 初回や任意タイミングで paint を要求する
+
+    公式資料:
+    https://github.com/WICG/html-in-canvas
+    https://html-in-canvas.dev/
+  -->
+
+  <!-- gl-matrix v2: mat4 行列演算ライブラリ -->
+  <script
+    src="https://cdnjs.cloudflare.com/ajax/libs/gl-matrix/2.8.1/gl-matrix-min.js"
+    integrity="sha512-zhHQR0/H5SEBL3Wn6yYSaTTZej12z0hVZKOv3TwCUXT1z5qeqGcXJLLrbERYRScEDDpYIJhPC1fk31gqR783iQ=="
+    crossorigin="anonymous">
+  </script>
+
+  <style>
+    *, *::before, *::after { box-sizing: border-box; }
+
+    body {
+      margin: 0;
+      background: #0f0c29;
+      color: #e0e0e0;
+      font-family: system-ui, "Helvetica Neue", sans-serif;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      min-height: 100vh;
+      gap: 14px;
+    }
+
+    h1 {
+      margin: 0;
+      font-size: 1.4rem;
+      font-weight: 600;
+      opacity: 0.85;
+      letter-spacing: 0.03em;
+    }
+
+    /* WebGL キャンバス */
+    #gl-canvas {
+      position: relative;
+      width: 600px;
+      height: 600px;
+      display: block;
+      cursor: grab;
+      touch-action: none;
+      /*
+        overflow:hidden で iframe の視覚表示をクリップする。
+        Chrome は display:none / opacity:0 ではペイントをスキップするが、
+        overflow:hidden でクリップされた要素はペイントを継続するため
+        texElementImage2D でテクスチャ転送が可能。
+      */
+      overflow: hidden;
+    }
+    #gl-canvas.dragging { cursor: grabbing; }
+
+    /*
+      各 iframe は gl-canvas の直接の子として負の座標に配置する。
+      overflow:hidden によりビューポートには表示されないが
+      Chrome は layoutsubtree 用途でペイントを継続する。
+    */
+    .face-iframe {
+      position: absolute;
+      top: -512px;
+      left: -512px;
+      width: 512px;
+      height: 512px;
+      border: 0;
+      pointer-events: none;
+    }
+
+
+    .hint {
+      font-size: 0.82rem;
+      opacity: 0.45;
+    }
+
+    /* フラグ未設定時の警告バナー */
+    #flag-notice {
+      background: rgba(255, 180, 0, 0.12);
+      border: 1px solid rgba(255, 180, 0, 0.35);
+      border-radius: 8px;
+      padding: 10px 18px;
+      font-size: 0.8rem;
+      text-align: center;
+      max-width: 580px;
+      line-height: 1.6;
+    }
+    #flag-notice code {
+      background: rgba(0, 0, 0, 0.4);
+      padding: 1px 6px;
+      border-radius: 3px;
+      font-size: 0.9em;
+    }
+    #flag-notice a {
+      color: #ffa94d;
+    }
+  </style>
+</head>
+<body>
+  <h1>HTML-in-Canvas &mdash; 3D Cube</h1>
+
+  <div id="flag-notice">
+    ⚠ このデモは
+    <strong>Chrome Canary</strong> / <strong>Brave Stable (Chromium 147+)</strong> が必要です。<br>
+    <code>chrome://flags/#canvas-draw-element</code> を <strong>Enabled</strong> にして再起動してください。<br>
+    <a href="https://html-in-canvas.dev/docs/browser-support/" target="_blank" rel="noopener">
+      詳細ガイド →
+    </a>
+  </div>
+
+  <!--
+    layoutsubtree 属性: canvas の直接の子要素を texElementImage2D の転送ソースにする。
+    iframe は overflow:hidden + 負座標でビューポートには表示されないが、
+    Chrome は layoutsubtree のためにペイントを継続する。
+  -->
+  <canvas id="gl-canvas" layoutsubtree>
+    <iframe id="face0" class="face-iframe" src="index1.html"></iframe>
+    <iframe id="face1" class="face-iframe" src="index2.html"></iframe>
+    <iframe id="face2" class="face-iframe" src="index3.html"></iframe>
+    <iframe id="face3" class="face-iframe" src="index4.html?v=2"></iframe>
+    <iframe id="face4" class="face-iframe" src="index5.html"></iframe>
+    <iframe id="face5" class="face-iframe" src="index6.html"></iframe>
+  </canvas>
+
+  <p class="hint">ドラッグ: 回転 ｜ マウスホイール / ピンチ: 拡大縮小</p>
+
+  <script>
+    'use strict';
+
+    // ================================================================
+    // 定数
+    // ================================================================
+    const FACE_COUNT = 6;
+    const FACE_IDS   = ['face0', 'face1', 'face2', 'face3', 'face4', 'face5'];
+
+    // ================================================================
+    // グローバル状態
+    // ================================================================
+    const canvas = document.getElementById('gl-canvas');
+
+    /** @type {WebGLRenderingContext|WebGL2RenderingContext|null} */
+    let gl = null;
+
+    let programInfo      = null;
+    let buffers          = null;
+    let textures         = [];
+    let texturesReady    = false;
+    let renderLoopActive = false;
+
+    // テクスチャ更新フラグ: canvas.onpaint 発火時に全面をダーティにする
+    let stageDirty = [];
+
+    // 回転角度 (radians)
+    let rotX = 0.35;
+    let rotY = 0.55;
+
+    // カメラ距離 (負値 = カメラ前方)
+    let zoom = -5.5;
+
+    // 現在フレームの逆 MVP 行列。
+    //
+    // MVP = Projection * ModelView
+    // これは「立方体ローカル座標 -> 画面へ投影される座標」を表す行列。
+    // その逆行列を使うと、
+    //   「画面のどこをクリックしたか」
+    //        ↓
+    //   「立方体ローカル空間のどの方向へ飛ぶレイか」
+    // を復元できる。
+    //
+    // このサンプルでは raycaster ライブラリを使わず、
+    // 逆行列から自前でレイを求めて各面と交差判定している。
+    const currentInverseMvpMatrix = mat4.create();
+    let interactionReady = false;
+
+    // ================================================================
+    // マウス / タッチ入力
+    //
+    // 公式仕様では DOM 位置の同期が必要だが、このような 3D 面インタラクションでは
+    // html-in-canvas.dev の 3D Room デモと同じく、3D 面へのヒットを UV に変換して
+    // 背後の DOM へ手動転送する方が安定する。
+    // そのため iframe 自体は pointer-events:none にし、ドラッグ/ズームは canvas に、
+    // クリック/入力/hover は ray hit -> iframe DOM 転送で処理する。
+    // ================================================================
+    let isDragging = false;
+    let lastX = 0;
+    let lastY = 0;
+    let dragMoved = false;
+    let lastTouchDist = null;
+    let lastTapPoint = null;
+    let hoveredFaceIndex = null;
+
+    function clamp01(value) {
+      return Math.max(0, Math.min(1, value));
+    }
+
+    function unprojectPoint(matrix, x, y, z) {
+      //
+      // NDC (Normalized Device Coordinates) の点を、
+      // 逆 MVP 行列で立方体ローカル空間へ戻す関数。
+      //
+      // 入力 x,y,z は以下の範囲を取る:
+      //   x: -1(左) 〜 +1(右)
+      //   y: -1(下) 〜 +1(上)
+      //   z: -1(near) 〜 +1(far)
+      //
+      // near 面と far 面の 2 点を unproject すれば、
+      // 画面の 1 ピクセルに対応する「3D 空間上のレイ」が作れる。
+      const w = matrix[3] * x + matrix[7] * y + matrix[11] * z + matrix[15];
+      if (!w) {
+        return null;
+      }
+      return {
+        x: (matrix[0] * x + matrix[4] * y + matrix[8] * z + matrix[12]) / w,
+        y: (matrix[1] * x + matrix[5] * y + matrix[9] * z + matrix[13]) / w,
+        z: (matrix[2] * x + matrix[6] * y + matrix[10] * z + matrix[14]) / w,
+      };
+    }
+
+    function getFaceHit(clientX, clientY) {
+      //
+      // この関数がこのサンプルの中核。
+      //
+      // 役割:
+      // 1. マウス位置(clientX, clientY)を canvas 内の NDC に変換する
+      // 2. NDC の near/far を逆 MVP 行列で 3D 空間へ戻す
+      // 3. そこから「視線レイ」を作る
+      // 4. そのレイが立方体のどの面に最初に当たるか調べる
+      // 5. 当たった面のローカル座標を UV 座標(0〜1)へ変換する
+      //
+      // 返り値の u, v は「その面の HTML のどこをクリックしたか」を表す。
+      // あとは iframe の幅・高さを掛ければ DOM の x, y 座標になる。
+      if (!interactionReady) {
+        return null;
+      }
+
+      const rect = canvas.getBoundingClientRect();
+      if (
+        clientX < rect.left || clientX > rect.right ||
+        clientY < rect.top || clientY > rect.bottom
+      ) {
+        return null;
+      }
+
+      const ndcX = ((clientX - rect.left) / rect.width) * 2 - 1;
+      const ndcY = 1 - ((clientY - rect.top) / rect.height) * 2;
+      const near = unprojectPoint(currentInverseMvpMatrix, ndcX, ndcY, -1);
+      const far = unprojectPoint(currentInverseMvpMatrix, ndcX, ndcY, 1);
+      if (!near || !far) {
+        return null;
+      }
+
+      const dir = {
+        x: far.x - near.x,
+        y: far.y - near.y,
+        z: far.z - near.z,
+      };
+      const length = Math.hypot(dir.x, dir.y, dir.z);
+      if (!length) {
+        return null;
+      }
+      dir.x /= length;
+      dir.y /= length;
+      dir.z /= length;
+
+      const candidates = [];
+
+      function testPlane(axis, plane, faceIndex, mapLocalToUv) {
+        //
+        // 立方体の各面は、ローカル空間では単純な平面で表せる。
+        // 例:
+        //   前面  = z =  1
+        //   背面  = z = -1
+        //   右面  = x =  1
+        //   左面  = x = -1
+        //
+        // レイとその平面の交点を求め、
+        // その交点が [-1, +1] の立方体範囲内にあるなら「面に当たった」とみなす。
+        //
+        // 最後に mapLocalToUv で、
+        //   交点の 3D ローカル座標 -> 2D UV 座標
+        // に変換する。
+        const axisValue = dir[axis];
+        if (Math.abs(axisValue) < 1e-6) {
+          return;
+        }
+
+        const t = (plane - near[axis]) / axisValue;
+        if (t <= 0) {
+          return;
+        }
+
+        const point = {
+          x: near.x + dir.x * t,
+          y: near.y + dir.y * t,
+          z: near.z + dir.z * t,
+        };
+
+        const epsilon = 1e-4;
+        if (
+          point.x < -1 - epsilon || point.x > 1 + epsilon ||
+          point.y < -1 - epsilon || point.y > 1 + epsilon ||
+          point.z < -1 - epsilon || point.z > 1 + epsilon
+        ) {
+          return;
+        }
+
+        const uv = mapLocalToUv(point);
+        candidates.push({
+          t,
+          faceIndex,
+          u: clamp01(uv.u),
+          v: clamp01(uv.v),
+        });
+      }
+
+      // ------------------------------------------------------------------
+      // UV→DOM 座標変換の考え方
+      // ------------------------------------------------------------------
+      // 各面の交点 point は 3D 座標 (x, y, z) で得られる。
+      // しかし iframe 内の DOM は 2D なので、
+      // その面の「横方向」「縦方向」に対応する軸を選んで 0〜1 に正規化する必要がある。
+      //
+      // 例: 前面 (+Z)
+      //   - 横方向は x
+      //   - 縦方向は y
+      //   - ただし DOM の y は上が 0 / 下が 1 なので、v は (1 - point.y) 側になる
+      //
+      // 面ごとに「どの軸が横・縦に対応するか」が異なるため、
+      // それぞれ別の式が必要になる。
+      // ここを取り違えると、button や input の hit test がずれる。
+
+      // Face 0: 前面 (+Z)
+      // 画面左上 -> cube(-1,+1,+1), 画面右下 -> cube(+1,-1,+1)
+      testPlane('z', 1, 0, point => ({
+        u: (point.x + 1) * 0.5,
+        v: (1 - point.y) * 0.5,
+      }));
+      // Face 1: 背面 (-Z)
+      // この面は front と違い、横軸が x ではなく y に対応する。
+      // 以前はここを x ベースで計算していたため、背面のクリック位置がずれていた。
+      testPlane('z', -1, 1, point => ({
+        u: (point.y + 1) * 0.5,
+        v: (1 - point.x) * 0.5,
+      }));
+      // Face 2: 上面 (+Y)
+      // top 面は「横 = z」「縦 = x」で貼られている。
+      // hover 判定を正しくするため、DOM 上の top-down 座標へ変換する。
+      testPlane('y', 1, 2, point => ({
+        u: (point.z + 1) * 0.5,
+        v: (1 - point.x) * 0.5,
+      }));
+      // Face 3: 底面 (-Y)
+      testPlane('y', -1, 3, point => ({
+        u: (point.x + 1) * 0.5,
+        v: (1 - point.z) * 0.5,
+      }));
+      // Face 4: 右面 (+X) = index5.html
+      // 原因: 以前は u/z, v/y と軸を取り違えており、button の位置ではなく
+      // 別の場所を elementFromPoint で拾っていた。
+      // 実際の UV は「横 = y」「縦 = z」。
+      testPlane('x', 1, 4, point => ({
+        u: (point.y + 1) * 0.5,
+        v: (1 - point.z) * 0.5,
+      }));
+      // Face 5: 左面 (-X)
+      testPlane('x', -1, 5, point => ({
+        u: (point.z + 1) * 0.5,
+        v: (1 - point.y) * 0.5,
+      }));
+
+      if (!candidates.length) {
+        return null;
+      }
+
+      candidates.sort((left, right) => left.t - right.t);
+      return candidates[0];
+    }
+
+    function getInteractiveTarget(frame, u, v) {
+      //
+      // 面上の UV (0〜1) を、iframe 内の実際の DOM ピクセル座標へ変換する。
+      //
+      // 例:
+      //   u = 0.5, v = 0.5 なら iframe の中央
+      //   u = 0,   v = 0   なら左上
+      //   u = 1,   v = 1   なら右下
+      //
+      // frameDocument.elementFromPoint(x, y) を使うことで、
+      // button / input / label など「その点にある DOM 要素」を取得できる。
+      const frameWindow = frame.contentWindow;
+      const frameDocument = frame.contentDocument;
+      if (!frameWindow || !frameDocument) {
+        return null;
+      }
+
+      const width = frameWindow.innerWidth || frame.clientWidth || 512;
+      const height = frameWindow.innerHeight || frame.clientHeight || 512;
+      const x = Math.max(0, Math.min(width - 1, u * width));
+      const y = Math.max(0, Math.min(height - 1, v * height));
+      const rawTarget = frameDocument.elementFromPoint(x, y);
+      if (!rawTarget) {
+        return null;
+      }
+
+      const target = rawTarget.closest?.('input, textarea, button, select, label, a, [tabindex], [contenteditable="true"]');
+      if (!target) {
+        return null;
+      }
+
+      const isActuallyInteractive =
+        target.matches?.('input, textarea, button, select, label, a, [contenteditable="true"]') ||
+        (target.hasAttribute?.('tabindex') && target.tabIndex >= 0);
+
+      if (!isActuallyInteractive) {
+        return null;
+      }
+
+      return { frameWindow, frameDocument, target };
+    }
+
+    /**
+     * UV 座標から、iframe 内で実際にスクロール可能な要素を探す。
+     *
+     * クリック対象は button / input のような interactive 要素を優先するが、
+     * wheel では「その場所にある scroll container」を優先したい。
+     * index4 の .leadtext のように overflow-y: scroll を持つ要素が対象になる。
+     */
+    function getScrollableTarget(frame, u, v) {
+      const frameWindow = frame.contentWindow;
+      const frameDocument = frame.contentDocument;
+      if (!frameWindow || !frameDocument) {
+        console.log('[getScrollableTarget] frame missing contentWindow/contentDocument', frame?.id, u, v);
+        return null;
+      }
+
+      const width = frameWindow.innerWidth || frame.clientWidth || 512;
+      const height = frameWindow.innerHeight || frame.clientHeight || 512;
+      const x = Math.max(0, Math.min(width - 1, u * width));
+      const y = Math.max(0, Math.min(height - 1, v * height));
+      let node = frameDocument.elementFromPoint(x, y);
+
+      window.__getScrollableTargetLogs = window.__getScrollableTargetLogs || [];
+      const initialLog = {
+        frame: frame.id,
+        u: Number(u.toFixed(3)),
+        v: Number(v.toFixed(3)),
+        x: Number(x.toFixed(1)),
+        y: Number(y.toFixed(1)),
+        initialTag: node?.tagName || null,
+      };
+      window.__getScrollableTargetLogs.push(initialLog);
+      console.log('[getScrollableTarget] frame', frame.id, 'u,v', u.toFixed(3), v.toFixed(3), 'point', x.toFixed(1), y.toFixed(1), 'initial', node?.tagName || null);
+
+      while (node && node !== frameDocument.body) {
+        if (node instanceof frameWindow.HTMLElement) {
+          const style = frameWindow.getComputedStyle(node);
+          const canScrollY = /(auto|scroll)/.test(style.overflowY) && node.scrollHeight > node.clientHeight;
+          const canScrollX = /(auto|scroll)/.test(style.overflowX) && node.scrollWidth > node.clientWidth;
+          const checkLog = {
+            frame: frame.id,
+            node: node.tagName,
+            className: node.className,
+            scrollY: canScrollY,
+            scrollX: canScrollX,
+            scrollSize: node.scrollWidth + 'x' + node.scrollHeight,
+            clientSize: node.clientWidth + 'x' + node.clientHeight,
+          };
+          window.__getScrollableTargetLogs.push(checkLog);
+          console.log('[getScrollableTarget] checking', node.tagName, 'class', node.className, 'scrollY', canScrollY, 'scrollX', canScrollX, 'size', node.scrollWidth + 'x' + node.scrollHeight, 'client', node.clientWidth + 'x' + node.clientHeight);
+          if (canScrollY || canScrollX) {
+            const foundLog = { frame: frame.id, found: node.tagName, className: node.className };
+            window.__getScrollableTargetLogs.push(foundLog);
+            console.log('[getScrollableTarget] found scrollable target', node.tagName, node.className);
+            return { frameWindow, target: node };
+          }
+        }
+        node = node.parentElement;
+      }
+
+      console.log('[getScrollableTarget] elementFromPoint failed, falling back to first scrollable element');
+      const allElements = frameDocument.querySelectorAll('*');
+      for (const candidate of allElements) {
+        if (!(candidate instanceof frameWindow.HTMLElement)) continue;
+        const style = frameWindow.getComputedStyle(candidate);
+        const canScrollY = /(auto|scroll)/.test(style.overflowY) && candidate.scrollHeight > candidate.clientHeight;
+        const canScrollX = /(auto|scroll)/.test(style.overflowX) && candidate.scrollWidth > candidate.clientWidth;
+        const fallbackLog = {
+          frame: frame.id,
+          fallbackNode: candidate.tagName,
+          className: candidate.className,
+          scrollY: canScrollY,
+          scrollX: canScrollX,
+          scrollSize: candidate.scrollWidth + 'x' + candidate.scrollHeight,
+          clientSize: candidate.clientWidth + 'x' + candidate.clientHeight,
+        };
+        window.__getScrollableTargetLogs.push(fallbackLog);
+        if (canScrollY || canScrollX) {
+          console.log('[getScrollableTarget] fallback found scrollable target', candidate.tagName, candidate.className);
+          return { frameWindow, target: candidate };
+        }
+      }
+
+      window.__getScrollableTargetLogs.push({ frame: frame.id, found: null });
+      console.log('[getScrollableTarget] none found in', frame.id);
+      return null;
+    }
+
+    /**
+     * wheel を 3D 面上の scroll container へ転送する。
+     *
+     * 成功した場合は true を返し、canvas 側のズームは行わない。
+     * スクロールできる要素が無い場合だけ、従来どおり立方体ズームへフォールバックする。
+     */
+    function dispatchFaceWheel(clientX, clientY, deltaX, deltaY) {
+      const hit = getFaceHit(clientX, clientY);
+      if (!hit) return false;
+
+      const frame = document.getElementById(FACE_IDS[hit.faceIndex]);
+      const doc = frame.contentDocument;
+      if (!doc) return false;
+
+      // ★擬似スクロール: 中身の #scroll-content を探す
+      const scrollContent = doc.getElementById('scroll-content');
+      
+      if (scrollContent) {
+        // 親枠（.leadtext）の高さと、中身（#scroll-content）の高さを取得
+        const parentHeight = scrollContent.parentElement.clientHeight;
+        const contentHeight = scrollContent.scrollHeight;
+
+        // もし中身が親枠より大きければスクロール処理を行う
+        if (contentHeight > parentHeight) {
+          // 現在の top 座標を取得（'px'を外して数値化）
+          let currentTop = parseFloat(scrollContent.style.top || '0');
+          
+          // deltaY を足して新しい位置を計算（下にスクロール＝topはマイナスになる）
+          let newTop = currentTop - deltaY;
+
+          // スクロールの限界値を計算して制限（はみ出し防止）
+          const minTop = parentHeight - contentHeight; // 一番下
+          const maxTop = 0; // 一番上
+          
+          newTop = Math.max(minTop, Math.min(maxTop, newTop));
+
+          // 座標を適用
+          if (currentTop !== newTop) {
+            scrollContent.style.top = newTop + 'px';
+
+            // 強制再描画
+            stageDirty[hit.faceIndex] = true;
+            requestAnimationFrame(() => {
+              stageDirty[hit.faceIndex] = true;
+              canvas.requestPaint?.();
+            });
+          }
+          return true; // 立方体のズームをキャンセル
+        }
+      }
+
+      return false;
+    }
+
+    function dispatchFaceAction(clientX, clientY) {
+      //
+      // 3D 面上の 1 回の click を、対応する iframe 内 DOM の click / focus に変換する。
+      //
+      // 処理の流れ:
+      //   clientX/Y -> getFaceHit() -> faceIndex + u/v
+      //   -> getInteractiveTarget() -> 実 DOM 要素
+      //   -> button なら click(), input なら focus()
+      //
+      // これにより、「見た目は WebGL の立方体面」なのに
+      // 実際には普通の HTML button や input が動くように見える。
+      const hit = getFaceHit(clientX, clientY);
+      if (!hit) {
+        return false;
+      }
+
+      const frame = document.getElementById(FACE_IDS[hit.faceIndex]);
+      const targetInfo = getInteractiveTarget(frame, hit.u, hit.v);
+      if (!targetInfo) {
+        return false;
+      }
+
+      const { frameWindow, target } = targetInfo;
+      frameWindow.focus();
+
+      if (target.tagName === 'LABEL' && target.control) {
+        target.control.focus({ preventScroll: true });
+        target.control.click?.();
+      } else if (
+        target.tagName === 'BUTTON' ||
+        target.tagName === 'A' ||
+        target.tagName === 'SELECT' ||
+        (target.tagName === 'INPUT' && ['button', 'submit', 'checkbox', 'radio'].includes(target.type))
+      ) {
+        target.click();
+      } else {
+        target.focus({ preventScroll: true });
+        if (typeof target.setSelectionRange === 'function') {
+          const valueLength = typeof target.value === 'string' ? target.value.length : 0;
+          target.setSelectionRange(valueLength, valueLength);
+        }
+      }
+
+      // ★ここも強制的に更新フラグを立てる
+      stageDirty[hit.faceIndex] = true;
+      requestAnimationFrame(() => {
+        stageDirty[hit.faceIndex] = true;
+        canvas.requestPaint?.();
+      });
+      return true;
+    }
+
+    function updateHover(clientX, clientY) {
+      //
+      // hover の完全一般化は難しいので、このサンプルでは index3 の面だけに限定している。
+      // 面 2 の上にレイが当たったときだけ mouseenter / mouseleave を
+      // body に手動 dispatch している。
+      //
+      // つまり hover も「DOM がそこにある」のではなく、
+      // 3D 面 hit を元にイベントを合成している。
+      const hit = getFaceHit(clientX, clientY);
+      const nextHoveredFace = hit?.faceIndex === 2 ? 2 : null;
+      if (nextHoveredFace === hoveredFaceIndex) {
+        return;
+      }
+
+      if (hoveredFaceIndex === 2) {
+        const previousBody = document.getElementById('face2').contentDocument?.body;
+        previousBody?.dispatchEvent(new MouseEvent('mouseleave'));
+      }
+      if (nextHoveredFace === 2) {
+        const nextBody = document.getElementById('face2').contentDocument?.body;
+        nextBody?.dispatchEvent(new MouseEvent('mouseenter'));
+      }
+      hoveredFaceIndex = nextHoveredFace;
+    }
+
+    canvas.addEventListener('mousedown', e => {
+      isDragging = true;
+      dragMoved = false;
+      lastX = e.clientX;
+      lastY = e.clientY;
+      canvas.classList.add('dragging');
+      e.preventDefault();
+    });
+
+    window.addEventListener('mousemove', e => {
+      if (!isDragging) {
+        updateHover(e.clientX, e.clientY);
+        return;
+      }
+
+      const dx = e.clientX - lastX;
+      const dy = e.clientY - lastY;
+      if (Math.hypot(dx, dy) > 3) {
+        dragMoved = true;
+      }
+      rotY += dx * 0.008;
+      rotX += dy * 0.008;
+      lastX = e.clientX;
+      lastY = e.clientY;
+    });
+
+    window.addEventListener('mouseup', e => {
+      if (!isDragging) return;
+      isDragging = false;
+      canvas.classList.remove('dragging');
+
+      if (!dragMoved) {
+        dispatchFaceAction(e.clientX, e.clientY);
+      }
+    });
+
+    canvas.addEventListener('mouseleave', () => {
+      updateHover(-1, -1);
+    });
+
+    // スクロールでズーム
+    //
+    // ただし、面上に scroll 可能な要素がある場合はそちらを優先する。
+    // 例: index4 の .leadtext
+    canvas.addEventListener('wheel', e => {
+      if (dispatchFaceWheel(e.clientX, e.clientY, e.deltaX, e.deltaY)) {
+        e.preventDefault();
+        return;
+      }
+
+      zoom += e.deltaY * 0.005;
+      zoom = Math.max(-10.0, Math.min(-2.0, zoom));
+      e.preventDefault();
+    }, { passive: false });
+
+    // タッチ: 1本指=回転, 2本指=ピンチズーム, タップ=面へのクリック転送
+    canvas.addEventListener('touchstart', e => {
+      if (e.touches.length === 1) {
+        isDragging = true;
+        dragMoved = false;
+        lastX = e.touches[0].clientX;
+        lastY = e.touches[0].clientY;
+        lastTapPoint = { x: lastX, y: lastY };
+      }
+      lastTouchDist = null;
+      e.preventDefault();
+    }, { passive: false });
+
+    canvas.addEventListener('touchmove', e => {
+      if (e.touches.length === 1 && isDragging) {
+        const dx = e.touches[0].clientX - lastX;
+        const dy = e.touches[0].clientY - lastY;
+        if (Math.hypot(dx, dy) > 3) {
+          dragMoved = true;
+        }
+        rotY += dx * 0.008;
+        rotX += dy * 0.008;
+        lastX = e.touches[0].clientX;
+        lastY = e.touches[0].clientY;
+      } else if (e.touches.length === 2) {
+        const d = Math.hypot(
+          e.touches[0].clientX - e.touches[1].clientX,
+          e.touches[0].clientY - e.touches[1].clientY
+        );
+        if (lastTouchDist !== null) {
+          zoom -= (d - lastTouchDist) * 0.015;
+          zoom = Math.max(-10.0, Math.min(-2.0, zoom));
+        }
+        lastTouchDist = d;
+      }
+      e.preventDefault();
+    }, { passive: false });
+
+    canvas.addEventListener('touchend', () => {
+      if (isDragging && !dragMoved && lastTapPoint) {
+        dispatchFaceAction(lastTapPoint.x, lastTapPoint.y);
+      }
+      isDragging = false;
+      lastTouchDist = null;
+      lastTapPoint = null;
+    });
+
+    // ================================================================
+    // WebGL ヘルパー
+    // ================================================================
+
+    /**
+     * シェーダーをコンパイルして返す
+     * @param {number} type gl.VERTEX_SHADER | gl.FRAGMENT_SHADER
+     * @param {string} src  GLSL ソース
+     */
+    function compileShader(type, src) {
+      const shader = gl.createShader(type);
+      gl.shaderSource(shader, src);
+      gl.compileShader(shader);
+      if (!gl.getShaderParameter(shader, gl.COMPILE_STATUS)) {
+        console.error('Shader compile error:', gl.getShaderInfoLog(shader));
+        gl.deleteShader(shader);
+        return null;
+      }
+      return shader;
+    }
+
+    /**
+     * シェーダープログラムをリンクして返す
+     */
+    function createShaderProgram(vsSrc, fsSrc) {
+      const vs   = compileShader(gl.VERTEX_SHADER,   vsSrc);
+      const fs   = compileShader(gl.FRAGMENT_SHADER, fsSrc);
+      const prog = gl.createProgram();
+      gl.attachShader(prog, vs);
+      gl.attachShader(prog, fs);
+      gl.linkProgram(prog);
+      if (!gl.getProgramParameter(prog, gl.LINK_STATUS)) {
+        console.error('Program link error:', gl.getProgramInfoLog(prog));
+        return null;
+      }
+      return prog;
+    }
+
+    // ================================================================
+    // 正立方体のジオメトリ
+    // ================================================================
+
+    /**
+     * 頂点バッファ・テクスチャ座標・インデックスを初期化して返す。
+     *
+     * 各面: 頂点4つ (bottom-left, bottom-right, top-right, top-left の順)
+     * 全6面で 24 頂点、インデックスは 6面 × 6 = 36 個。
+     * 面ごとに別テクスチャで描画できるよう、drawElements のオフセットで制御。
+     */
+    function initGeometry() {
+      // prettier-ignore
+      const positions = new Float32Array([
+        // Front face  (+Z) — 外から見て表
+        -1, -1,  1,   1, -1,  1,   1,  1,  1,  -1,  1,  1,
+        // Back face   (-Z)
+        -1, -1, -1,  -1,  1, -1,   1,  1, -1,   1, -1, -1,
+        // Top face    (+Y)
+        -1,  1, -1,  -1,  1,  1,   1,  1,  1,   1,  1, -1,
+        // Bottom face (-Y)
+        -1, -1, -1,   1, -1, -1,   1, -1,  1,  -1, -1,  1,
+        // Right face  (+X)
+         1, -1, -1,   1,  1, -1,   1,  1,  1,   1, -1,  1,
+        // Left face   (-X)
+        -1, -1, -1,  -1, -1,  1,  -1,  1,  1,  -1,  1, -1,
+      ]);
+
+      // UV 座標 (UNPACK_FLIP_Y_WEBGL=true 時):
+      //   UV(0,0) = HTML bottom-left  /  UV(1,1) = HTML top-right
+      // 各面共通: bottom-left(0,0), bottom-right(1,0), top-right(1,1), top-left(0,1)
+      const uvTemplate = [0, 0,  1, 0,  1, 1,  0, 1];
+      const texCoords  = new Float32Array(FACE_COUNT * 8);
+      for (let i = 0; i < FACE_COUNT; i++) {
+        texCoords.set(uvTemplate, i * 8);
+      }
+
+      // インデックス: 各面を 2 三角形 (= 6 インデックス) で描画
+      const indices = new Uint16Array(FACE_COUNT * 6);
+      for (let i = 0; i < FACE_COUNT; i++) {
+        const b = i * 4;
+        indices.set([b, b + 1, b + 2,  b, b + 2, b + 3], i * 6);
+      }
+
+      const posBuf = gl.createBuffer();
+      gl.bindBuffer(gl.ARRAY_BUFFER, posBuf);
+      gl.bufferData(gl.ARRAY_BUFFER, positions, gl.STATIC_DRAW);
+
+      const uvBuf = gl.createBuffer();
+      gl.bindBuffer(gl.ARRAY_BUFFER, uvBuf);
+      gl.bufferData(gl.ARRAY_BUFFER, texCoords, gl.STATIC_DRAW);
+
+      const idxBuf = gl.createBuffer();
+      gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, idxBuf);
+      gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, indices, gl.STATIC_DRAW);
+
+      return { position: posBuf, texCoord: uvBuf, indices: idxBuf };
+    }
+
+    // ================================================================
+    // テクスチャ管理
+    // ================================================================
+
+    /** 各面用テクスチャを作成（初期値はダークグレー 1×1 ピクセル）*/
+    function createFaceTextures() {
+      textures = [];
+      const placeholder = new Uint8Array([30, 30, 45, 255]);
+      for (let i = 0; i < FACE_COUNT; i++) {
+        const tex = gl.createTexture();
+        gl.bindTexture(gl.TEXTURE_2D, tex);
+        gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, 1, 1, 0,
+                      gl.RGBA, gl.UNSIGNED_BYTE, placeholder);
+        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+        textures.push(tex);
+      }
+    }
+
+    /**
+     * HTML-in-Canvas API:
+     *   texElementImage2D を使って各 iframe の描画内容を WebGL テクスチャに転送する。
+     *
+     * canvas.onpaint イベント内から呼ばれる。
+     * このイベント内では現フレームのスナップショットが利用可能。
+     */
+    function updateTexturesFromHTML() {
+      if (!gl || textures.length < FACE_COUNT) return;
+
+      // HTML の Y 軸は上から下、WebGL テクスチャは下から上なので反転する
+      gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, true);
+
+      for (let i = 0; i < FACE_COUNT; i++) {
+        if (!stageDirty[i]) continue;
+        const frame = document.getElementById(FACE_IDS[i]);
+        gl.bindTexture(gl.TEXTURE_2D, textures[i]);
+        try {
+          // texElementImage2D: layoutsubtree の子要素(iframe)を直接 WebGL テクスチャへ転送。
+          // drawElementImage(iframe) は 2D コンテキストでは iframe コンテンツを描画できないが、
+          // texElementImage2D は layoutsubtree 用の専用 API のため iframe コンテンツを取得できる。
+          gl.texElementImage2D(
+            gl.TEXTURE_2D, 0, gl.RGBA,
+            gl.RGBA, gl.UNSIGNED_BYTE,
+            frame
+          );
+          gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+          gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+          gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+          stageDirty[i] = false;
+          //console.log(`[updateTextures] face${i} OK`);
+        } catch (err) {
+          // フラグ未設定時などは API が存在しないためエラーになる
+          console.warn(`[updateTextures] face${i} (${FACE_IDS[i]}) 失敗:`, err.message);
+        }
+      }
+      texturesReady = true;
+    }
+
+    // ================================================================
+    // シーン描画
+    // ================================================================
+
+    function drawScene() {
+      if (!gl || !programInfo || !buffers) return;
+
+      gl.viewport(0, 0, canvas.width, canvas.height);
+      gl.clearColor(0.06, 0.05, 0.16, 1.0);
+      gl.clearDepth(1.0);
+      gl.enable(gl.DEPTH_TEST);
+      gl.depthFunc(gl.LEQUAL);
+      gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
+
+      // ---- 射影行列 (透視投影) ----
+      const proj = mat4.create();
+      mat4.perspective(
+        proj,
+        Math.PI / 4,                          // FOV 45°
+        canvas.width / canvas.height,          // アスペクト比
+        0.1, 100.0                             // near / far
+      );
+
+      // ---- モデルビュー行列 ----
+      const mv = mat4.create();
+      mat4.translate(mv, mv, [0, 0, zoom]);   // カメラ距離
+      mat4.rotateX(mv, mv, rotX);             // ドラッグ回転 X
+      mat4.rotateY(mv, mv, rotY);             // ドラッグ回転 Y
+
+      const mvp = mat4.create();
+      mat4.multiply(mvp, proj, mv);
+      if (mat4.invert(currentInverseMvpMatrix, mvp)) {
+        interactionReady = true;
+      }
+
+      // ---- 頂点属性のセット ----
+      gl.bindBuffer(gl.ARRAY_BUFFER, buffers.position);
+      gl.vertexAttribPointer(programInfo.aPos, 3, gl.FLOAT, false, 0, 0);
+      gl.enableVertexAttribArray(programInfo.aPos);
+
+      gl.bindBuffer(gl.ARRAY_BUFFER, buffers.texCoord);
+      gl.vertexAttribPointer(programInfo.aUV, 2, gl.FLOAT, false, 0, 0);
+      gl.enableVertexAttribArray(programInfo.aUV);
+
+      gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, buffers.indices);
+      gl.useProgram(programInfo.program);
+
+      // ---- ユニフォーム ----
+      gl.uniformMatrix4fv(programInfo.uProj, false, proj);
+      gl.uniformMatrix4fv(programInfo.uMV,   false, mv);
+
+      // ---- 各面を個別テクスチャで描画 ----
+      // 1面 = 6インデックス × Uint16(2バイト) = 12バイトのオフセット
+      for (let i = 0; i < FACE_COUNT; i++) {
+        gl.activeTexture(gl.TEXTURE0);
+        gl.bindTexture(gl.TEXTURE_2D, textures[i]);
+        gl.uniform1i(programInfo.uSampler, 0);
+        gl.drawElements(gl.TRIANGLES, 6, gl.UNSIGNED_SHORT, i * 12);
+      }
+    }
+
+    /**
+     * requestAnimationFrame による連続レンダリングループ。
+     *
+     * 注意:
+     * このループは立方体の姿勢(rotX / rotY / zoom)を毎フレーム描くだけでなく、
+     * currentInverseMvpMatrix も更新する。
+     *
+     * つまり click 判定に使う座標変換は、
+     * 常に「いま表示されている立方体の向き」と一致する。
+     */
+    function renderLoop() {
+      updateTexturesFromHTML();
+      drawScene();
+      requestAnimationFrame(renderLoop);
+    }
+
+    // ================================================================
+    // WebGL 初期化
+    // ================================================================
+    function initWebGL() {
+      // WebGL2 を優先、フォールバックで WebGL1
+      gl = canvas.getContext('webgl2') || canvas.getContext('webgl');
+      if (!gl) {
+        console.error('WebGL が利用できません');
+        return false;
+      }
+
+      // ---- GLSL シェーダー ----
+      const vsSrc = `
+        attribute vec4 aPos;
+        attribute vec2 aUV;
+        uniform mat4 uProj;
+        uniform mat4 uMV;
+        varying highp vec2 vUV;
+        void main(void) {
+          gl_Position = uProj * uMV * aPos;
+          vUV = aUV;
+        }
+      `;
+      const fsSrc = `
+        varying highp vec2 vUV;
+        uniform sampler2D uSampler;
+        void main(void) {
+          gl_FragColor = texture2D(uSampler, vUV);
+        }
+      `;
+
+      const prog = createShaderProgram(vsSrc, fsSrc);
+      if (!prog) return false;
+
+      programInfo = {
+        program:  prog,
+        aPos:     gl.getAttribLocation(prog,  'aPos'),
+        aUV:      gl.getAttribLocation(prog,  'aUV'),
+        uProj:    gl.getUniformLocation(prog, 'uProj'),
+        uMV:      gl.getUniformLocation(prog, 'uMV'),
+        uSampler: gl.getUniformLocation(prog, 'uSampler'),
+      };
+
+      buffers = initGeometry();
+      createFaceTextures();
+      return true;
+    }
+
+    // ================================================================
+    // エントリーポイント
+    // ================================================================
+    window.addEventListener('load', () => {
+
+      // canvas の内部ピクセルサイズをデバイスピクセルに合わせる
+      // (Retina ディスプレイでのぼやけ防止)
+      const ro = new ResizeObserver(([entry]) => {
+        canvas.width  = entry.devicePixelContentBoxSize[0].inlineSize;
+        canvas.height = entry.devicePixelContentBoxSize[0].blockSize;
+      });
+      ro.observe(canvas, { box: 'device-pixel-content-box' });
+
+      // WebGL 初期化
+      if (!initWebGL()) return;
+
+      // gl-canvas (layoutsubtree) の初期化。
+      //
+      // texElementImage2D は WebGL コンテキストを持つキャンバスの直接の子要素にのみ適用できる。
+      // そのため iframe は gl-canvas の直接の子として配置し、
+      // overflow:hidden + 負座標で視覚的に隠す。
+      // Chrome は overflow:hidden でクリップされた要素のペイントを継続するため
+      // onpaint イベントが発火し続ける。
+      for (let i = 0; i < FACE_COUNT; i++) {
+        stageDirty.push(true);
+        const frame = document.getElementById(FACE_IDS[i]);
+        // iframe ロード完了時にペイントを要求する
+        frame.addEventListener('load', () => canvas.requestPaint?.());
+      }
+
+      // onpaint: いずれかの iframe コンテンツが変化したとき全面をダーティにする
+      canvas.onpaint = () => {
+        for (let i = 0; i < FACE_COUNT; i++) stageDirty[i] = true;
+      };
+
+      if (typeof canvas.requestPaint !== 'function') {
+        console.warn('HTML-in-Canvas API is unavailable. Enable chrome://flags/#canvas-draw-element to test the live texture path.');
+      }
+
+      canvas.requestPaint?.();
+
+      // レンダリングループを開始
+      renderLoopActive = true;
+      renderLoop();
+    });
+  </script>
+</body>
+</html>

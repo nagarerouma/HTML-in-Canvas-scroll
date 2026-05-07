@@ -1,0 +1,132 @@
+<!DOCTYPE html>
+<!--
+  index5.html
+  ------------------------------------------------------------------
+    このファイルは「立方体の 5 面目」に表示される HTML です。
+
+  HTML-in-Canvas の基本的な考え方:
+  1. この HTML は普段どおりブラウザでレイアウトされる
+  2. index.html 側でその描画結果を WebGL テクスチャとして立方体に貼る
+  3. ユーザーが 3D の面をクリックしたら、index.html 側で
+     「どの面のどの座標がクリックされたか」を計算し、
+     対応する DOM 要素へ click / focus を手動で転送する
+
+  つまりこの button 自体は普通の HTML ボタンで、
+  direct に index5.html を開いた場合も、そのままクリックできます。
+    3D キューブ上でクリックできるかどうかは index.html 側の
+    UV→DOM 座標変換ロジックに依存します。
+
+    つまり button 自体に問題があるのではなく、
+    「右面のどの場所が button に対応するか」を index.html が
+    正しく計算できているかが成功の鍵になります。
+-->
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <style>
+        /*
+         * HTML / body をビューポートいっぱいに広げる。
+         * index.html 側ではこのページを 512x512 の iframe として読み込むため、
+         * この指定により面全体を使ったレイアウトになる。
+         */
+        /* ブラウザーの全面に表示するための設定 */
+        html, body {
+            margin: 0;
+            padding: 0;
+            width: 100vw;
+            height: 100vh;
+            overflow: hidden;
+        }
+
+        body {
+            /*
+             * 普通の Web ページと同じ CSS がそのまま使える。
+             * HTML-in-Canvas は「スクリーンショット」ではなく、
+             * ブラウザ自身のレイアウト・描画結果をテクスチャ化するので、
+             * フォント、ボタン、input などの見た目をそのまま反映できる。
+             */
+            /* 背景をマゼンタ色に設定 */
+            background-color: #ff00ff; 
+            /* 中央揃えのためのFlexbox設定 */
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            /* テキストを白色に設定 */
+            color: #ffffff;
+            font-family: 'Arial Black', sans-serif;
+        }
+
+        .number {
+            /* 画面サイズに合わせた大きなフォントサイズ */
+            font-size: 40vw; 
+            line-height: 1;
+            /* ネイティブな文字の美しさがCanvas上でも維持されます */
+            user-select: none;
+        }
+
+        .btn-area {
+            /*
+             * ボタンを面の下側中央に固定配置する。
+             * button の座標が分かりやすいほど、3D 面から DOM への
+             * クリック転送のデバッグもしやすい。
+             */
+            position: absolute;
+            bottom: 24px;
+            left: 50%;
+            transform: translateX(-50%);
+        }
+
+        .hello-btn {
+            /*
+             * これはただの通常の HTML ボタン。
+             * index5.html を単体で開くと、そのままクリックできて console.log が出る。
+             * 3D キューブ上で効かない場合は、button 側ではなく
+             * index.html 側の hit test / 座標変換を疑うのが正しい切り分け。
+             */
+            font-size: 1.1rem;
+            font-weight: bold;
+            padding: 10px 28px;
+            border: none;
+            border-radius: 8px;
+            background: #fff;
+            color: #ff00ff;
+            cursor: pointer;
+            box-shadow: 0 4px 12px rgba(0,0,0,0.3);
+            transition: transform 0.1s ease, box-shadow 0.1s ease;
+        }
+        .hello-btn:active {
+            transform: scale(0.96);
+            box-shadow: 0 2px 6px rgba(0,0,0,0.3);
+        }
+    </style>
+</head>
+<body>
+    <div class="number">5</div>
+    <div class="btn-area">
+            <!--
+                初心者向けメモ:
+                この button 自体には特別な HTML-in-Canvas API は不要です。
+                普通の button を置いて、普通に click handler を書くだけです。
+
+                重要なのは index.html 側で、
+                「立方体の右面(face4)のどこをクリックしたか」を
+                この button の DOM 座標に正しく変換できることです。
+            -->
+      <button class="hello-btn" id="hello-btn">HELLO</button>
+    </div>
+
+    <script>
+            /*
+             * クリックされたことが分かる最小の動作確認。
+             * DevTools の Console で HELLO と表示されれば、
+             * button までは正しく click が届いている。
+             *
+             * もし 3D キューブ上で表示されない場合は、
+             * index5.html ではなく index.html 側の hit test を確認する。
+             */
+      document.getElementById('hello-btn').addEventListener('click', () => {
+        console.log('HELLO');
+      });
+    </script>
+</body>
+</html>

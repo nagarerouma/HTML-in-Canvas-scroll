@@ -1,0 +1,160 @@
+<!DOCTYPE html>
+<!--
+  index6.html
+  ------------------------------------------------------------------
+  このファイルは立方体の 6 面目に貼られる HTML です。
+
+  目的:
+  - button を押すと「Google を表示したい」という要求に対し、
+    HTML-in-Canvas のクロスオリジン制約を学べるようにする
+
+  学習ポイント:
+  - 同一オリジンの HTML は texElementImage2D / drawElementImage で描ける
+  - しかし cross-origin iframe は仕様上ブロックされる
+  - そのため実際のアプリでは、外部サイトを直接テクスチャに貼るのではなく、
+    自分のオリジン内の UI に置き換える必要がある
+-->
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <style>
+        /* ブラウザーの全面に表示するための設定 */
+        html, body {
+            margin: 0;
+            padding: 0;
+            width: 100vw;
+            height: 100vh;
+            overflow: hidden;
+        }
+
+        body {
+            /* 背景をシアン色に設定 */
+            background-color: #00ffff; 
+            /* 中央揃えのためのFlexbox設定 */
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            /* テキストを白色に設定 */
+            color: #ffffff;
+            font-family: 'Arial Black', sans-serif;
+        }
+
+        .number {
+            /* 画面サイズに合わせた大きなフォントサイズ */
+            font-size: 40vw; 
+            line-height: 1;
+            /* ネイティブな文字の美しさがCanvas上でも維持されます */
+            user-select: none;
+        }
+
+        .btn-area {
+          /*
+           * 5 面目の button と同じく、操作部品を下寄せ中央に固定する。
+           * UI の位置が明快だと、3D 面上でのクリック転送の学習に向いている。
+           */
+            position: absolute;
+            bottom: 24px;
+            left: 50%;
+            transform: translateX(-50%);
+        }
+
+        .google-btn {
+          /*
+           * これは通常の HTML ボタン。
+           * 3D 面上では index.html 側が click をこのボタンへ転送する。
+           */
+            font-size: 1rem;
+            font-weight: bold;
+            padding: 10px 24px;
+            border: none;
+            border-radius: 8px;
+            background: #fff;
+            color: #00bcd4;
+            cursor: pointer;
+            box-shadow: 0 4px 12px rgba(0,0,0,0.3);
+            transition: transform 0.1s ease;
+        }
+        .google-btn:active { transform: scale(0.96); }
+
+        /*
+         * クロスオリジン制約の説明バナー（ボタンクリック後に表示）
+         * HTML-in-Canvas 仕様 Privacy-preserving painting セクションより:
+         *   「Cross-origin data in embedded content (e.g., <iframe>) は
+         *    texElementImage2D/drawElementImage で転送できない」
+         */
+        #cross-origin-notice {
+            display: none;
+            position: fixed;
+            inset: 0;
+            background: rgba(0,0,0,0.75);
+            color: #fff;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            padding: 32px;
+            gap: 16px;
+            text-align: center;
+            font-size: 0.95rem;
+            line-height: 1.7;
+            z-index: 999;
+        }
+        #cross-origin-notice.visible { display: flex; }
+        #cross-origin-notice strong { font-size: 1.1rem; color: #ffd54f; }
+        #cross-origin-notice code {
+            background: rgba(255,255,255,0.15);
+            padding: 2px 8px;
+            border-radius: 4px;
+            font-size: 0.88rem;
+        }
+        #close-btn {
+            margin-top: 8px;
+            padding: 8px 22px;
+            border: 1px solid #fff;
+            border-radius: 6px;
+            background: transparent;
+            color: #fff;
+            cursor: pointer;
+            font-size: 0.9rem;
+        }
+    </style>
+</head>
+<body>
+    <div class="number">6</div>
+
+    <div class="btn-area">
+      <!--
+        この button は単体ページでは普通に click できる。
+        3D キューブ上での click は index.html の UV→DOM 変換に依存する。
+      -->
+      <button class="google-btn" id="google-btn">Google を表示</button>
+    </div>
+
+    <!-- クロスオリジン制約の説明モーダル -->
+    <div id="cross-origin-notice" role="dialog" aria-modal="true">
+      <strong>⚠ クロスオリジン制約 (HTML-in-Canvas 仕様)</strong>
+      <p>
+        HTML-in-Canvas の仕様
+        (<a href="https://github.com/WICG/html-in-canvas" target="_blank" rel="noopener" style="color:#80d8ff">WICG/html-in-canvas</a>)
+        の <em>Privacy-preserving painting</em> セクションに明記されているとおり、<br>
+        <code>google.com</code> のようなクロスオリジンの <code>&lt;iframe&gt;</code> は
+        <code>texElementImage2D</code> / <code>drawElementImage</code> で
+        WebGL テクスチャへ転送することが<strong>できません</strong>。
+      </p>
+      <p>これはプライバシー保護のためのセキュリティ制約です。</p>
+      <button id="close-btn">閉じる</button>
+    </div>
+
+    <script>
+      /*
+       * クリック時にクロスオリジン制約の説明モーダルを出す。
+       * 実際に google.com を貼るのではなく、「なぜできないのか」を教えるための UI。
+       */
+      document.getElementById('google-btn').addEventListener('click', () => {
+        document.getElementById('cross-origin-notice').classList.add('visible');
+      });
+      document.getElementById('close-btn').addEventListener('click', () => {
+        document.getElementById('cross-origin-notice').classList.remove('visible');
+      });
+    </script>
+</body>
+</html>

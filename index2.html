@@ -1,0 +1,109 @@
+<!DOCTYPE html>
+<!--
+  index2.html
+  ------------------------------------------------------------------
+  このファイルは立方体の 2 面目に貼られる HTML です。
+
+  重要な注意点:
+  HTML-in-Canvas では、canvas 子要素に対する CSS transform は
+  「見た目の同期」や「ヒットテスト」には関係しますが、
+  描画そのものには使われません。
+
+  仕様書の記述:
+  - CSS transforms on canvas children are ignored for rendering.
+  - changing the transform does not cause the paint event to fire.
+
+  そのため、以前のように GSAP で rotate / scale をアニメーションしても、
+  index2.html を単体で開けば動いて見える一方、
+  HTML-in-Canvas 経由で立方体面に貼ったときは更新されません。
+
+  このファイルでは transform ではなく、
+  「font-size」「color」「text-shadow」など
+  実際の描画内容が変わるプロパティを GSAP でアニメーションさせています。
+  これにより paint が発火し、立方体の面でも変化が反映されます。
+-->
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+    <style>
+    /*
+     * iframe の中を画面いっぱいに使うための基本設定。
+     * index.html 側ではこのページを 512x512 の iframe として使うので、
+     * ここで全面レイアウトにしておくと立方体の面を広く使える。
+     */
+        /* ブラウザーの全面に表示するための設定 */
+        html, body {
+            margin: 0;
+            padding: 0;
+            width: 100vw;
+            height: 100vh;
+            overflow: hidden;
+        }
+
+        body {
+          /*
+           * 緑の背景を敷き、中央に数字を置く。
+           * HTML-in-Canvas は普通の CSS レイアウト結果をそのままテクスチャ化するので、
+           * ここで書く CSS は通常の HTML と同じ感覚で扱ってよい。
+           */
+            /* 背景を赤色に設定 */
+            background-color: #00ff00; 
+            /* 中央揃えのためのFlexbox設定 */
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            /* テキストを白色に設定 */
+            color: #ffffff;
+            font-family: 'Arial Black', sans-serif;
+        }
+
+        .number {
+            /*
+             * transform ではなく font-size をアニメーション対象にするため、
+             * 初期値を CSS で定義しておく。
+             * font-size の変化はレイアウトと描画に効くので、paint が発火する。
+             */
+            /* 画面サイズに合わせた大きなフォントサイズ */
+            font-size: 40vw; 
+            line-height: 1;
+            /* ネイティブな文字の美しさがCanvas上でも維持されます */
+            user-select: none;
+            color: #ffffff;
+            text-shadow: 0 0 0 rgba(0, 0, 0, 0);
+        }
+    </style>
+  <!-- GSAP 3 (CDN) -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/gsap/3.12.5/gsap.min.js" crossorigin="anonymous"></script>
+</head>
+<body>
+    <div class="number" id="num2">2</div>
+
+    <script>
+      /*
+       * GSAP 自体は単体ページでは transform も正常に動く。
+       * しかし HTML-in-Canvas では transform は描画に使われないため、
+       * rotate / scale アニメーションは立方体面に反映されない。
+       *
+       * そこで以下では、描画に直接効くプロパティだけをアニメーションする:
+       * - fontSize: 数字そのものの大きさが変わる
+       * - color: 文字色が変わる
+       * - textShadow: 発光して見える
+       *
+       * これらは paint を発火させるので、HTML-in-Canvas 経由でも見える。
+       */
+      gsap.timeline({ repeat: -1, yoyo: true })
+        .to('#num2', {
+          duration: 1.4,
+          fontSize: '48vw',
+          color: '#004d00',
+          textShadow: '0 0 26px rgba(255,255,255,0.75)',
+          ease: 'sine.inOut',
+        })
+        .to('body', {
+          duration: 1.4,
+          backgroundColor: '#7dff7d',
+          ease: 'sine.inOut',
+        }, 0);
+    </script>
+</body>
+</html>

@@ -1,0 +1,76 @@
+<!DOCTYPE html>
+<!--
+    index3.html
+    ------------------------------------------------------------------
+    このファイルは立方体の 3 面目に貼られる HTML です。
+
+    目的:
+    - マウスホバーのような UI 変化も HTML-in-Canvas 上で扱えることを示す
+
+    実装の考え方:
+    - body の backgroundColor / color を切り替える
+    - これらは transform ではなく、実際の描画内容が変わる CSS なので
+        paint が発火して面のテクスチャが更新される
+-->
+<html lang="ja">
+<head>
+        <meta charset="UTF-8">
+    <style>
+        /* ブラウザーの全面に表示するための設定 */
+        html, body {
+            margin: 0;
+            padding: 0;
+            width: 100vw;
+            height: 100vh;
+            overflow: hidden;
+        }
+
+        body {
+            /* 背景を赤色に設定 */
+            background-color: #0000ff; 
+            /* 中央揃えのためのFlexbox設定 */
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            /* テキストを白色に設定 */
+            color: #ffffff;
+            font-family: 'Arial Black', sans-serif;
+        }
+
+        .number {
+            /* 画面サイズに合わせた大きなフォントサイズ */
+            font-size: 40vw; 
+            line-height: 1;
+            /* ネイティブな文字の美しさがCanvas上でも維持されます */
+            user-select: none;
+        }
+
+        body {
+            /*
+             * HTML-in-Canvas の paint イベントは CSS 変数や background-color の変化を
+             * 検知して自動的に再スナップショットを取るため、JS で background-color を
+             * 切り替えるだけで面のテクスチャが更新される。
+             */
+            transition: background-color 0.3s ease;
+        }
+    </style>
+</head>
+<body>
+    <div class="number">3</div>
+
+    <script>
+    /*
+     * マウスインすると背景色と文字色を反転する。
+     * 実際の hover 判定は index.html 側で
+     * 「3D 面にマウスが乗ったか」を計算し、この body に mouseenter / mouseleave を
+     * 手動で dispatch している。
+     */
+      let inverted = false;
+      document.body.addEventListener('mouseenter', () => {
+        inverted = !inverted;
+        document.body.style.backgroundColor = inverted ? '#ffff00' : '#0000ff';
+        document.body.style.color = inverted ? '#0000ff' : '#ffffff';
+      });
+    </script>
+</body>
+</html>
